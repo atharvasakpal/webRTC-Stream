@@ -4,6 +4,7 @@ const Dashboard = ({ socket, isConnected, clients }) => {
   const [isReceiving, setIsReceiving] = useState(false);
   const [error, setError] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('waiting');
+  const [debugInfo, setDebugInfo] = useState([]);
   const videoRef = useRef(null);
   const peerConnectionRef = useRef(null);
 
@@ -15,17 +16,25 @@ const Dashboard = ({ socket, isConnected, clients }) => {
     ]
   };
 
+  // Debug logging function
+  const addDebugLog = (message) => {
+    console.log(`[Dashboard Debug] ${message}`);
+    setDebugInfo(prev => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`]);
+  };
+
   useEffect(() => {
     if (!socket) return;
 
     // Handle incoming offers from mobile devices
     socket.on('offer', async (data) => {
       try {
+        addDebugLog('Received offer from mobile device');
         setError(null);
         setConnectionStatus('connecting');
         await handleOffer(data.offer, data.from);
       } catch (err) {
         console.error('Error handling offer:', err);
+        addDebugLog(`Error handling offer: ${err.message}`);
         setError('Failed to connect to mobile device');
         setConnectionStatus('error');
       }
@@ -34,14 +43,17 @@ const Dashboard = ({ socket, isConnected, clients }) => {
     socket.on('ice-candidate', async (data) => {
       try {
         if (peerConnectionRef.current && data.candidate) {
+          addDebugLog('Adding ICE candidate');
           await peerConnectionRef.current.addIceCandidate(data.candidate);
         }
       } catch (err) {
         console.error('Error adding ICE candidate:', err);
+        addDebugLog(`ICE candidate error: ${err.message}`);
       }
     });
 
     socket.on('user-disconnected', (userId) => {
+      addDebugLog('Mobile device disconnected');
       if (peerConnectionRef.current) {
         peerConnectionRef.current.close();
         peerConnectionRef.current = null;
@@ -62,32 +74,62 @@ const Dashboard = ({ socket, isConnected, clients }) => {
 
   const handleOffer = async (offer, fromId) => {
     try {
+      addDebugLog('Creating peer connection');
       const pc = new RTCPeerConnection(config);
       peerConnectionRef.current = pc;
 
       // Handle incoming stream
       pc.ontrack = (event) => {
-        console.log('Received remote stream');
-        if (videoRef.current && event.streams[0]) {
-          videoRef.current.srcObject = event.streams[0];
-          setIsReceiving(true);
-          setConnectionStatus('connected');
+        addDebugLog(`Received ${event.streams.length} stream(s) with ${event.streams[0]?.getTracks().length} tracks`);
+        
+        if (event.streams && event.streams[0]) {
+          const stream = event.streams[0];
+          addDebugLog(`Stream tracks: ${stream.getTracks().map(t => t.kind).join(', ')}`);
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            
+            // Add event listeners to video element
+            videoRef.current.onloadedmetadata = () => {
+              addDebugLog('Video metadata loaded');
+              setIsReceiving(true);
+              setConnectionStatus('connected');
+            };
+            
+            videoRef.current.oncanplay = () => {
+              addDebugLog('Video can play');
+            };
+            
+            videoRef.current.onerror = (e) => {
+              addDebugLog(`Video error: ${e.message || 'Unknown error'}`);
+            };
+            
+            // Force play the video
+            videoRef.current.play().catch(err => {
+              addDebugLog(`Video play error: ${err.message}`);
+            });
+          }
+        } else {
+          addDebugLog('No streams received in ontrack event');
         }
       };
 
       // Handle ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate && socket) {
+          addDebugLog('Sending ICE candidate');
           socket.emit('ice-candidate', {
             candidate: event.candidate,
             to: fromId
           });
+        } else if (!event.candidate) {
+          addDebugLog('ICE gathering complete');
         }
       };
 
       // Handle connection state changes
       pc.onconnectionstatechange = () => {
-        console.log('Connection state:', pc.connectionState);
+        addDebugLog(`Connection state: ${pc.connectionState}`);
         switch (pc.connectionState) {
           case 'connected':
             setConnectionStatus('connected');
@@ -96,6 +138,7 @@ const Dashboard = ({ socket, isConnected, clients }) => {
           case 'failed':
             setConnectionStatus('disconnected');
             setIsReceiving(false);
+            addDebugLog('Connection failed or disconnected');
             break;
           case 'connecting':
             setConnectionStatus('connecting');
@@ -105,13 +148,22 @@ const Dashboard = ({ socket, isConnected, clients }) => {
         }
       };
 
+      // Handle ICE connection state changes
+      pc.oniceconnectionstatechange = () => {
+        addDebugLog(`ICE connection state: ${pc.iceConnectionState}`);
+      };
+
       // Set remote description and create answer
+      addDebugLog('Setting remote description');
       await pc.setRemoteDescription(offer);
+      
+      addDebugLog('Creating answer');
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
 
       // Send answer back
       if (socket) {
+        addDebugLog('Sending answer to mobile device');
         socket.emit('answer', {
           answer: answer,
           to: fromId
@@ -120,6 +172,7 @@ const Dashboard = ({ socket, isConnected, clients }) => {
 
     } catch (err) {
       console.error('Error in handleOffer:', err);
+      addDebugLog(`HandleOffer error: ${err.message}`);
       setError('Failed to establish connection');
       setConnectionStatus('error');
     }
@@ -170,6 +223,8 @@ const Dashboard = ({ socket, isConnected, clients }) => {
                     ref={videoRef}
                     autoPlay
                     playsInline
+                    muted={false}
+                    controls
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -205,6 +260,22 @@ const Dashboard = ({ socket, isConnected, clients }) => {
         {/* Sidebar */}
         <div className="lg:col-span-1">
           <div className="space-y-4">
+            {/* Debug Info */}
+            <div className="card bg-base-100 shadow-xl">
+              <div className="card-body p-4">
+                <h3 className="font-semibold mb-3">Debug Log</h3>
+                <div className="text-xs space-y-1 max-h-32 overflow-y-auto">
+                  {debugInfo.length > 0 ? (
+                    debugInfo.map((log, index) => (
+                      <div key={index} className="text-base-content/70">{log}</div>
+                    ))
+                  ) : (
+                    <div className="text-base-content/50">No debug info yet</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* Connection Info */}
             <div className="card bg-base-100 shadow-xl">
               <div className="card-body p-4">
@@ -220,6 +291,12 @@ const Dashboard = ({ socket, isConnected, clients }) => {
                     <span>Stream:</span>
                     <span className={`font-semibold ${isReceiving ? 'text-success' : 'text-base-content/70'}`}>
                       {isReceiving ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>WebRTC:</span>
+                    <span className={`font-semibold ${peerConnectionRef.current ? 'text-success' : 'text-base-content/70'}`}>
+                      {peerConnectionRef.current ? 'Connected' : 'Not Connected'}
                     </span>
                   </div>
                 </div>
