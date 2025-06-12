@@ -3,13 +3,12 @@ import React, { useState, useRef, useEffect } from 'react';
 const MobileCamera = ({ socket, isConnected }) => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState(null);
-  const [facingMode, setFacingMode] = useState('user'); // 'user' or 'environment'
+  const [facingMode, setFacingMode] = useState('user');
   const [debugInfo, setDebugInfo] = useState([]);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const peerConnectionRef = useRef(null);
 
-  // WebRTC configuration
   const config = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -17,7 +16,6 @@ const MobileCamera = ({ socket, isConnected }) => {
     ]
   };
 
-  // Debug logging function
   const addDebugLog = (message) => {
     console.log(`[Mobile Debug] ${message}`);
     setDebugInfo(prev => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${message}`]);
@@ -26,7 +24,6 @@ const MobileCamera = ({ socket, isConnected }) => {
   useEffect(() => {
     if (!socket) return;
 
-    // Handle incoming requests for offers
     socket.on('answer', async (data) => {
       try {
         addDebugLog('Received answer from dashboard');
@@ -59,14 +56,22 @@ const MobileCamera = ({ socket, isConnected }) => {
     };
   }, [socket]);
 
+
+  ///EDITED NOW
+  useEffect(() => {
+    if (socket && isConnected) {
+      socket.emit('register', { type: 'mobile' });
+    }
+  }, [socket, isConnected]);
+
   const startCamera = async () => {
     try {
       setError(null);
       addDebugLog('Starting camera...');
-      
+
       const constraints = {
         video: {
-          facingMode: facingMode,
+          facingMode,
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
@@ -76,18 +81,17 @@ const MobileCamera = ({ socket, isConnected }) => {
       addDebugLog(`Requesting camera access (${facingMode})`);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
-      
+
       addDebugLog(`Got stream with ${stream.getTracks().length} tracks: ${stream.getTracks().map(t => t.kind).join(', ')}`);
-      
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
 
       setIsStreaming(true);
-      
-      // Create WebRTC connection
+
       await createPeerConnection(stream);
-      
+
     } catch (err) {
       console.error('Error accessing camera:', err);
       addDebugLog(`Camera error: ${err.message}`);
@@ -101,40 +105,34 @@ const MobileCamera = ({ socket, isConnected }) => {
       const pc = new RTCPeerConnection(config);
       peerConnectionRef.current = pc;
 
-      // Add local stream to peer connection
       addDebugLog('Adding tracks to peer connection...');
       stream.getTracks().forEach((track, index) => {
         addDebugLog(`Adding track ${index + 1}: ${track.kind} (${track.label})`);
         pc.addTrack(track, stream);
       });
 
-      // Handle ICE candidates
       pc.onicecandidate = (event) => {
         if (event.candidate && socket) {
           addDebugLog('Sending ICE candidate to dashboard');
-          socket.emit('ice-candidate', {
-            candidate: event.candidate
-          });
+          socket.emit('ice-candidate', { candidate: event.candidate });
         } else if (!event.candidate) {
           addDebugLog('ICE gathering complete');
         }
       };
 
-      // Handle connection state changes
       pc.onconnectionstatechange = () => {
         addDebugLog(`Connection state: ${pc.connectionState}`);
       };
 
-      // Handle ICE connection state changes
       pc.oniceconnectionstatechange = () => {
         addDebugLog(`ICE connection state: ${pc.iceConnectionState}`);
       };
 
-      // Create and send offer
       addDebugLog('Creating offer...');
-      const offer = await pc.createOffer();
+      const offer = await pc.createOffer(); // FIX: Removed offerToReceive*
+      addDebugLog('Setting local description...');
       await pc.setLocalDescription(offer);
-      
+
       addDebugLog('Sending offer to dashboard');
       if (socket) {
         socket.emit('offer', { offer });
@@ -151,7 +149,7 @@ const MobileCamera = ({ socket, isConnected }) => {
 
   const stopCamera = () => {
     addDebugLog('Stopping camera...');
-    
+
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => {
         track.stop();
@@ -159,17 +157,17 @@ const MobileCamera = ({ socket, isConnected }) => {
       });
       streamRef.current = null;
     }
-    
+
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
       addDebugLog('Closed peer connection');
     }
-    
+
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
-    
+
     setIsStreaming(false);
   };
 
@@ -177,7 +175,7 @@ const MobileCamera = ({ socket, isConnected }) => {
     const newFacingMode = facingMode === 'user' ? 'environment' : 'user';
     addDebugLog(`Switching camera to ${newFacingMode}`);
     setFacingMode(newFacingMode);
-    
+
     if (isStreaming) {
       stopCamera();
       setTimeout(() => startCamera(), 500);
@@ -189,7 +187,7 @@ const MobileCamera = ({ socket, isConnected }) => {
       <div className="card bg-base-100 shadow-xl">
         <div className="card-body">
           <h2 className="card-title">Mobile Camera</h2>
-          
+
           {error && (
             <div className="alert alert-error">
               <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
@@ -199,7 +197,6 @@ const MobileCamera = ({ socket, isConnected }) => {
             </div>
           )}
 
-          {/* Debug Info */}
           <div className="card bg-base-200 mb-4">
             <div className="card-body p-3">
               <h3 className="font-semibold text-sm mb-2">Debug Log</h3>
@@ -243,13 +240,13 @@ const MobileCamera = ({ socket, isConnected }) => {
                 ) : (
                   <>
                     <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 00-2-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                     </svg>
                     Start Camera
                   </>
                 )}
               </button>
-              
+
               <button
                 className="btn btn-outline"
                 onClick={switchCamera}
@@ -265,7 +262,6 @@ const MobileCamera = ({ socket, isConnected }) => {
               Camera: {facingMode === 'user' ? 'Front' : 'Back'}
             </div>
 
-            {/* Connection Status */}
             <div className="stats shadow">
               <div className="stat place-items-center py-2">
                 <div className="stat-title text-xs">Socket</div>
